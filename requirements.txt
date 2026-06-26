@@ -7,7 +7,9 @@ numpy
 faster-whisper
 realtimestt
 realtimetts[system]
-audioop-lts
-nvidia-riva-client
-websockets==16.0          # lo exige RealtimeSTT; gana sobre el <16 de riva (solo uso gRPC de riva)
+audioop-lts; python_version >= "3.13"   # audioop salió de la stdlib en 3.13; en 3.12 es nativo
+websockets==16.0          # lo exige RealtimeSTT
 azure-cognitiveservices-speech   # TTS humano + visemas para lip-sync exacto
+google-genai>=2.7.0      # Gemini Interactions API + Computer Use
+playwright>=1.56.0       # navegador sandbox para ejecutar acciones de Computer Use
+truststore>=0.10.0       # usar certificados del sistema Windows para APIs HTTPS

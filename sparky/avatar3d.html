@@ -8,17 +8,52 @@
   *{margin:0;padding:0;box-sizing:border-box}
   html,body{height:100%;overflow:hidden;background:#0a1120;font-family:'Segoe UI',system-ui,sans-serif}
   #avatar{position:absolute;inset:0}
-  #ui{position:absolute;left:0;right:0;bottom:6vh;display:flex;flex-direction:column;
+  /* UI oculta: tótem limpio (el avatar arranca solo). Quita display:none para depurar. */
+  #ui{display:none;position:absolute;left:0;right:0;bottom:6vh;flex-direction:column;
       align-items:center;gap:2vh;z-index:10}
   button{font-size:3.2vmin;padding:1.6vh 4vw;border:none;border-radius:3vmin;cursor:pointer;
          background:#2dd4ff;color:#06131f;font-weight:600;box-shadow:0 0 6vmin rgba(45,212,255,.5)}
   button:disabled{opacity:.4;cursor:default}
   #status{color:#9fd9ff;font-size:2.6vmin;min-height:3vh;text-align:center;padding:0 4vw}
   #err{color:#ff8a8a}
+  /* Panel de imágenes (a la derecha, en el espacio libre; no cubre al avatar) */
+  #visual{position:absolute;top:50%;right:2.5vw;transform:translateY(-50%) translateX(118%);
+    width:36vw;max-height:84vh;display:flex;flex-direction:column;gap:1.4vh;z-index:20;
+    background:rgba(10,17,32,.82);border:1px solid rgba(45,212,255,.35);border-radius:2vmin;
+    padding:1.8vh 1.4vw;box-shadow:0 0 7vmin rgba(45,212,255,.3);backdrop-filter:blur(4px);
+    opacity:0;pointer-events:none;transition:opacity .45s ease, transform .45s ease}
+  #visual.show{opacity:1;transform:translateY(-50%) translateX(0)}
+  #visualImg{width:100%;max-height:70vh;object-fit:contain;border-radius:1.2vmin;background:#05080f}
+  #visualCap{color:#bfe6ff;font-size:2.2vmin;font-weight:600;text-align:center;line-height:1.2}
+  #agentPanel{position:absolute;left:2.4vw;bottom:3vh;width:min(34vw,520px);z-index:24;
+    display:flex;flex-direction:column;gap:1.1vh;background:rgba(6,15,30,.9);
+    border:1px solid rgba(45,212,255,.35);border-radius:1.2vmin;padding:1.6vh 1.3vw;
+    color:#d9f4ff;box-shadow:0 0 6vmin rgba(0,0,0,.35);backdrop-filter:blur(5px)}
+  #agentPanel[hidden]{display:none}
+  #agentTitle{font-size:2.2vmin;font-weight:700;color:#7ddcff}
+  #agentMessage{font-size:1.9vmin;line-height:1.25;color:#e5f7ff}
+  #agentIntent,#agentUrl{font-size:1.55vmin;line-height:1.25;color:#a6c7d8;overflow:hidden;text-overflow:ellipsis}
+  #agentActions{display:flex;gap:.7vw;align-items:center;flex-wrap:wrap}
+  #agentActions button{font-size:1.7vmin;padding:1vh 1.1vw;border-radius:.8vmin;box-shadow:none}
+  #agentConfirm{background:#35e899;color:#04130e}
+  #agentCancel,#agentStop{background:#ff7373;color:#210909}
 </style>
 </head>
 <body>
   <div id="avatar"></div>
+  <video id="cam" autoplay muted playsinline style="display:none"></video>
+  <div id="visual"><img id="visualImg" alt=""><div id="visualCap"></div></div>
+  <div id="agentPanel" hidden>
+    <div id="agentTitle">Sparky usando navegador</div>
+    <div id="agentMessage"></div>
+    <div id="agentIntent"></div>
+    <div id="agentUrl"></div>
+    <div id="agentActions">
+      <button id="agentConfirm">Confirmar</button>
+      <button id="agentCancel">Cancelar</button>
+      <button id="agentStop">Detener</button>
+    </div>
+  </div>
   <div id="ui">
     <div id="status">Pulsa Iniciar para cargar el avatar…</div>
     <button id="start">▶ Iniciar</button>
@@ -38,16 +73,37 @@
 import { TalkingHead } from "talkinghead";
 // HeadAudio: lip-sync dirigido por audio (independiente del idioma → funciona en español)
 import { HeadAudio } from "https://cdn.jsdelivr.net/gh/met4citizen/HeadAudio@main/modules/headaudio.mjs";
+// face-api: detección + reconocimiento facial en el navegador (presencia + reconocerte)
+import * as faceapi from "https://cdn.jsdelivr.net/npm/@vladmandic/face-api/dist/face-api.esm.js";
+
+const FACE_MODELS = "https://cdn.jsdelivr.net/npm/@vladmandic/face-api/model";
+const FACE_THRESHOLD = 0.5;   // distancia máx para "misma persona" (igual que config.FACE_MATCH_THRESHOLD)
 
 const HEADAUDIO = "https://cdn.jsdelivr.net/gh/met4citizen/HeadAudio@main";
-// Avatar humano realista del repo TalkingHead (GLB con blendshapes ARKit + visemas Oculus)
-const AVATAR = "https://cdn.jsdelivr.net/gh/met4citizen/TalkingHead@main/avatars/brunette.glb";
+// ── AVATAR ────────────────────────────────────────────────────────────────
+// Para un avatar MÁS HUMANO usa Ready Player Me (RPM):
+//   1) Entra a https://readyplayer.me/  → crea un avatar (puede parecerse a ti, sube una selfie).
+//   2) Copia el ID del avatar (el código en la URL del .glb que te dan).
+//   3) Pégalo abajo en RPM_ID y cambia AVATAR_BODY a "M" (hombre) o "F" (mujer).
+// Los morphTargets ARKit+Oculus son OBLIGATORIOS o el lip-sync no mueve la boca.
+const RPM_ID = "";   // ej. "64bfa1...c3934a6"  (vacío = usa el avatar por defecto de abajo)
+const AVATAR_BODY = "F";
+const AVATAR = RPM_ID
+  ? `https://models.readyplayer.me/${RPM_ID}.glb?morphTargets=ARKit,Oculus%20Visemes&textureAtlas=1024&pose=A&lod=0`
+  : "https://cdn.jsdelivr.net/gh/met4citizen/TalkingHead@main/avatars/brunette.glb";
 
 const el = {
   avatar: document.getElementById("avatar"),
   status: document.getElementById("status"),
   start: document.getElementById("start"),
   mic: document.getElementById("mic"),
+  agentPanel: document.getElementById("agentPanel"),
+  agentMessage: document.getElementById("agentMessage"),
+  agentIntent: document.getElementById("agentIntent"),
+  agentUrl: document.getElementById("agentUrl"),
+  agentConfirm: document.getElementById("agentConfirm"),
+  agentCancel: document.getElementById("agentCancel"),
+  agentStop: document.getElementById("agentStop"),
 };
 // Reporta a pantalla Y al log del servidor (para depurar sin abrir la consola)
 const log = (msg) => { fetch("/log?m=" + encodeURIComponent(msg)).catch(()=>{}); };
@@ -57,6 +113,47 @@ const setStatus = (t, err=false) => {
   log((err ? "ERROR: " : "ok: ") + t);
 };
 
+async function postAgent(path, payload={}) {
+  const res = await fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+    cache: "no-store",
+  });
+  return await res.json();
+}
+
+async function callFreeTool(name, args={}) {
+  const res = await fetch("/tools/call", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, args }),
+    cache: "no-store",
+  });
+  return await res.json();
+}
+
+function updateAgentPanel(agent) {
+  if (!agent || agent.status === "disabled" || agent.status === "idle") {
+    el.agentPanel.hidden = true;
+    return;
+  }
+  el.agentPanel.hidden = false;
+  el.agentMessage.textContent = agent.status === "failed" && agent.error
+    ? "Error: " + agent.error
+    : (agent.message || agent.status || "");
+  el.agentIntent.textContent = agent.current_intent ? "Paso: " + agent.current_intent : "";
+  el.agentUrl.textContent = agent.current_url ? "URL: " + agent.current_url : "";
+  const waiting = !!agent.awaiting_confirmation;
+  el.agentConfirm.hidden = !waiting;
+  el.agentCancel.hidden = !waiting;
+  el.agentStop.hidden = false;
+}
+
+el.agentConfirm.onclick = async () => updateAgentPanel(await postAgent("/agent/confirm", { approved: true }));
+el.agentCancel.onclick = async () => updateAgentPanel(await postAgent("/agent/confirm", { approved: false }));
+el.agentStop.onclick = async () => updateAgentPanel(await postAgent("/agent/stop"));
+
 // Capturar cualquier error que se escape
 window.addEventListener("error", (e) =>
   setStatus("JS error: " + (e.message || e.error) + " @ " + (e.filename||"") + ":" + (e.lineno||""), true));
@@ -64,6 +161,8 @@ window.addEventListener("unhandledrejection", (e) =>
   setStatus("Promesa rechazada: " + ((e.reason && e.reason.message) || e.reason), true));
 
 let head, headaudio, ttsEngine = "piper";
+let liveCfg = null;   // /live_config: {key, model, name, gemini_live}
+let clientInstanceId = "";
 
 el.start.onclick = async () => {
   el.start.disabled = true;
@@ -78,8 +177,9 @@ el.start.onclick = async () => {
     head = new TalkingHead(el.avatar, {
       ttsEndpoint: "N/A",
       lipsyncModules: [],          // sin módulos de idioma: usamos HeadAudio (audio)
-      cameraView: "upper",
-      modelFPS: 30,                // 30 fps para hardware modesto (GT 710)
+      cameraView: "full",          // cuerpo completo en pantalla
+      modelFPS: 30,                // estable junto a face-api + MediaPipe; sube a 60 si va fluido
+      modelPixelRatio: window.devicePixelRatio || 1,   // render más nítido (no pixelado)
       mixerGainSpeech: 3,
     });
     window.TH = head;              // exponer para depuración
@@ -87,16 +187,32 @@ el.start.onclick = async () => {
     setStatus("Cargando avatar humano… (puede tardar la 1ª vez)");
     await head.showAvatar({
       url: AVATAR,
-      body: "F",
+      body: AVATAR_BODY,
       avatarMood: "neutral",
       lipsyncLang: "en",           // irrelevante: el movimiento viene del audio
+      avatarIdleEyeContact: 0.72,
+      avatarIdleHeadMove: 0.38,
+      avatarSpeakingEyeContact: 0.82,
+      avatarSpeakingHeadMove: 0.68,
+      baseline: {
+        mouthSmile: 0.05,
+        browInnerUp: 0.04,
+        chestInhale: 0.06,
+      },
     });
+    logMorphTargets();
+    startHumanMotion();
 
     // ¿Qué motor TTS? Azure trae visemas exactos (no necesita HeadAudio).
     const st0 = await (await fetch("/state", {cache:"no-store"})).json();
     ttsEngine = st0.tts || "piper";
+    updateAgentPanel(st0.computer);
+    liveCfg = await (await fetch("/live_config", {cache:"no-store"})).json();
+    clientInstanceId = liveCfg.instance_id || st0.instance_id || "";
+    const gemini = !!liveCfg.gemini_live;
 
-    if (ttsEngine !== "azure") {
+    // HeadAudio (lip-sync por audio) hace falta para Piper Y para Gemini Live.
+    if (ttsEngine !== "azure" || gemini) {
       setStatus("Cargando motor de lip-sync (HeadAudio)…");
       await head.audioCtx.audioWorklet.addModule(HEADAUDIO + "/modules/headworklet.mjs");
       headaudio = new HeadAudio(head.audioCtx, {
@@ -104,17 +220,23 @@ el.start.onclick = async () => {
         parameterData: { vadMode: 1 },
       });
       await headaudio.loadModel(HEADAUDIO + "/dist/model-en-mixed.bin");
-      headaudio.onvalue = (key, value) => {
-        Object.assign(head.mtAvatar[key], { newvalue: value, needsUpdate: true });
-      };
-      head.opt.update = headaudio.update.bind(headaudio);  // solo Piper
+      headaudio.onvalue = (key, value) => applyLiveViseme(key, value);
+      head.opt.update = headaudio.update.bind(headaudio);
     }
 
     if (head.audioCtx.state === "suspended") await head.audioCtx.resume();
 
-    startSpeakLoop();  // empezar a escuchar la cola de audio del servidor
+    startSpeakLoop();  // gestos/presencia/enroll (+ audio del servidor si NO es Gemini)
 
-    setStatus("✅ Avatar listo (" + ttsEngine + "). Hablará cuando reciba audio.");
+    wantPoseMirror = !!st0.pose_mirror;
+    if (st0.camera) await startCamera();  // presencia + reconocimiento facial (abre la webcam)
+
+    if (gemini) {
+      startGeminiLive();   // ← oye, ve y habla por Gemini Live (reemplaza el cerebro/voz viejo)
+      setStatus("✅ Sparky Live (Gemini) — háblale, te oye y te ve.");
+    } else {
+      setStatus("✅ Avatar listo (" + ttsEngine + "). Hablará cuando reciba audio.");
+    }
     el.mic.disabled = (ttsEngine === "azure");  // el mic-test solo aplica a HeadAudio
   } catch (e) {
     console.error(e);
@@ -128,11 +250,248 @@ let lastGen = null;
 const playedIds = new Set();
 let currentMood = null;
 const MOOD = { neutral:"neutral", happy:"happy", thinking:"neutral",
-               sad:"sad", alert:"fear", sleep:"sleep" };
+               sad:"sad", alert:"fear", sleep:"sleep", angry:"angry",
+               fear:"fear", disgust:"disgust", love:"love" };
+const FACE_STYLE = {
+  neutral: { smile:0.07, squint:0.02, brow:0.04, wide:0.00 },
+  happy:   { smile:0.30, squint:0.18, brow:0.08, wide:0.00 },
+  sad:     { smile:0.00, squint:0.04, brow:0.18, wide:0.00 },
+  angry:   { smile:0.00, squint:0.22, brow:0.00, wide:0.00 },
+  fear:    { smile:0.00, squint:0.00, brow:0.26, wide:0.18 },
+  disgust: { smile:0.00, squint:0.18, brow:0.04, wide:0.00 },
+  love:    { smile:0.24, squint:0.20, brow:0.14, wide:0.00 },
+  sleep:   { smile:0.00, squint:0.00, brow:0.00, wide:0.00 },
+};
+const FACE_PULSE = {
+  happy:"😊", sad:"😟", angry:"😠", fear:"😮", disgust:"😬", love:"🥰", sleep:"😴"
+};
+const VISEME_GAIN = {
+  sil:0, aa:0.96, E:0.86, I:0.82, O:0.92, U:0.88,
+  PP:1.00, SS:0.72, TH:0.78, CH:0.76, FF:0.86, kk:0.68, nn:0.64, RR:0.72, DD:0.70,
+};
+const HUMAN_STATE_STYLE = {
+  idle:       { smile:0.00, squint:0.00, brow:0.00, wide:0.00, mouth:0.00, headX:0.00,  headY:0.00,  bodyY:0.00, gaze:1.00, breath:1.00 },
+  listening:  { smile:0.04, squint:0.04, brow:0.10, wide:0.02, mouth:0.00, headX:-0.012,headY:0.00,  bodyY:0.00, gaze:0.55, breath:1.05 },
+  thinking:   { smile:0.01, squint:0.09, brow:0.16, wide:0.00, mouth:0.02, headX:0.020, headY:-0.025,bodyY:-0.015,gaze:1.35, breath:0.90 },
+  speaking:   { smile:0.03, squint:0.03, brow:0.05, wide:0.00, mouth:0.00, headX:0.00,  headY:0.00,  bodyY:0.00, gaze:0.75, breath:1.18 },
+  explaining: { smile:0.08, squint:0.02, brow:0.08, wide:0.03, mouth:0.00, headX:-0.005,headY:0.035, bodyY:0.035, gaze:0.95, breath:1.15 },
+  greeting:   { smile:0.18, squint:0.10, brow:0.13, wide:0.05, mouth:0.03, headX:-0.010,headY:0.015, bodyY:0.020, gaze:0.55, breath:1.20 },
+  surprised:  { smile:0.00, squint:0.00, brow:0.28, wide:0.25, mouth:0.13, headX:-0.020,headY:0.00,  bodyY:0.00, gaze:0.50, breath:1.25 },
+  serious:    { smile:0.00, squint:0.12, brow:0.12, wide:0.00, mouth:0.00, headX:0.010, headY:0.00,  bodyY:0.00, gaze:0.65, breath:0.95 },
+};
+const HUMAN_STATE_CUE_COOLDOWN = {
+  greeting: 3500,
+  explaining: 5200,
+  thinking: 8500,
+  surprised: 4500,
+  serious: 5000,
+};
+let humanMotionStarted = false, humanRaf = null, faceBaselines = {};
+let gazeTarget = { x:0, y:0, next:0 }, lastLookAt = 0, lastExpressionPulse = 0, lastStateCue = {};
+let humanState = "idle", humanStateUntil = 0, lastHumanState = "";
+let lastUserVoiceAt = 0, awaitingAssistant = false, micLevel = 0;
+let speechVisemes = {};
+
+const clamp01 = (v) => Math.max(0, Math.min(1, Number.isFinite(v) ? v : 0));
+
+function isSpeakingNow() {
+  return !!(azBusy || azQueue.length || currentSrc || audioQueue.length);
+}
+
+function hasMt(name) {
+  return !!(head && head.mtAvatar && head.mtAvatar[name]);
+}
+
+function setMtNew(name, value) {
+  if (!hasMt(name)) return;
+  Object.assign(head.mtAvatar[name], { newvalue: clamp01(value), needsUpdate: true });
+}
+
+function setBaselineSmooth(name, target, alpha=0.08) {
+  if (!head || typeof head.setBaselineValue !== "function") return;
+  if (!hasMt(name) && name !== "eyesRotateX" && name !== "eyesRotateY") return;
+  let cur = faceBaselines[name];
+  if (cur === undefined) {
+    try { cur = head.getBaselineValue(name); } catch(e) { cur = 0; }
+    if (cur === undefined || cur === null) cur = 0;
+  }
+  const next = cur + (target - cur) * alpha;
+  faceBaselines[name] = next;
+  try { head.setBaselineValue(name, next); } catch(e) {}
+}
+
+function logMorphTargets() {
+  try {
+    const names = typeof head.getMorphTargetNames === "function" ? head.getMorphTargetNames() : Object.keys(head.mtAvatar || {});
+    const useful = ["mouthSmile","jawOpen","mouthOpen","browInnerUp","eyeSquintLeft","eyeSquintRight","chestInhale","headRotateX","eyesRotateY"]
+      .filter(n => names.includes(n));
+    log("morph targets: " + names.length + " (" + useful.join(", ") + ")");
+  } catch(e) {}
+}
+
+function pulseExpression(emo) {
+  const now = performance.now();
+  const g = FACE_PULSE[emo];
+  if (!g || now - lastExpressionPulse < 1400) return;
+  lastExpressionPulse = now;
+  try { head.playGesture(g, 1.4, false, 350); } catch(e) {}
+}
+
+function setHumanState(state, ttl=0, reason="") {
+  if (!HUMAN_STATE_STYLE[state]) state = "idle";
+  const now = performance.now();
+  if (state === humanState && ttl) {
+    humanStateUntil = Math.max(humanStateUntil, now + ttl);
+    return;
+  }
+  humanState = state;
+  humanStateUntil = ttl ? now + ttl : 0;
+  if (state !== lastHumanState) {
+    lastHumanState = state;
+    log("estado humano: " + state + (reason ? " (" + reason + ")" : ""));
+    cueHumanState(state);
+  }
+}
+
+function getHumanState(now) {
+  if (humanState !== "idle" && humanStateUntil && now > humanStateUntil) {
+    humanState = "idle";
+    humanStateUntil = 0;
+  }
+  if (isSpeakingNow() && (humanState === "idle" || humanState === "listening" || humanState === "thinking")) return "speaking";
+  return humanState || "idle";
+}
+
+function isHumanStateActive(state, now=performance.now()) {
+  return humanState === state && (!humanStateUntil || now <= humanStateUntil);
+}
+
+function cueHumanState(state) {
+  const now = performance.now();
+  if (now - (lastStateCue[state] || 0) < (HUMAN_STATE_CUE_COOLDOWN[state] || 3000)) return;
+  lastStateCue[state] = now;
+  try {
+    if (state === "greeting") head.playGesture("handup", 2.2, false, 700);
+    else if (state === "explaining") head.playGesture("index", 2.4, false, 700);
+    else if (state === "thinking") head.playGesture("shrug", 1.4, false, 600);
+    else if (state === "surprised") head.lookAtCamera(350);
+    else if (state === "serious") head.lookAtCamera(500);
+  } catch(e) {}
+}
+
+function observeUserAudio(samples) {
+  if (!samples || !samples.length) return;
+  let sum = 0;
+  for (let i=0; i<samples.length; i++) sum += samples[i] * samples[i];
+  micLevel = micLevel * 0.82 + Math.sqrt(sum / samples.length) * 0.18;
+  const now = performance.now();
+  if (micLevel > 0.018 && (!isSpeakingNow() || micLevel > 0.04)) {
+    lastUserVoiceAt = now;
+    awaitingAssistant = true;
+    setHumanState("listening", 900, "voz usuario");
+  } else if (awaitingAssistant && !isSpeakingNow() && now - lastUserVoiceAt > 650 &&
+             !isHumanStateActive("explaining") && !isHumanStateActive("greeting")) {
+    setHumanState("thinking", 1500, "procesando");
+  }
+}
+
+function updateHumanFace(now) {
+  if (!head || !head.mtAvatar) return;
+  const t = now / 1000;
+  const speaking = isSpeakingNow();
+  const activeState = getHumanState(now);
+  const st = HUMAN_STATE_STYLE[activeState] || HUMAN_STATE_STYLE.idle;
+  const mood = currentMood || "neutral";
+  const f = FACE_STYLE[mood] || FACE_STYLE.neutral;
+  const breath = (0.055 + 0.045 * (Math.sin(t * 2.15) + 1) / 2 + (speaking ? 0.018 : 0)) * st.breath;
+  const nod = (speaking ? Math.sin(t * 3.2) * 0.018 : Math.sin(t * 0.9) * 0.010) + st.headX;
+  const sway = Math.sin(t * 0.42) * 0.018 + Math.sin(t * 0.77) * 0.009 + st.headY;
+
+  if (now > gazeTarget.next) {
+    gazeTarget.x = (Math.random() - 0.5) * (speaking ? 0.07 : 0.11) * st.gaze;
+    gazeTarget.y = (Math.random() - 0.5) * (speaking ? 0.09 : 0.14) * st.gaze;
+    gazeTarget.next = now + 900 + Math.random() * 1800;
+  }
+  if (now - lastLookAt > 4200 && Math.random() < (activeState === "listening" ? 0.025 : 0.012)) {
+    try { head.lookAtCamera(450); lastLookAt = now; } catch(e) {}
+  }
+
+  setBaselineSmooth("chestInhale", breath, 0.07);
+  setBaselineSmooth("headRotateX", nod, 0.06);
+  setBaselineSmooth("headRotateY", sway, 0.045);
+  setBaselineSmooth("headRotateZ", Math.sin(t * 0.58) * 0.010, 0.04);
+  setBaselineSmooth("bodyRotateY", sway * 0.55 + st.bodyY, 0.035);
+  setBaselineSmooth("eyesRotateX", gazeTarget.x, 0.055);
+  setBaselineSmooth("eyesRotateY", gazeTarget.y, 0.055);
+  setBaselineSmooth("mouthSmile", f.smile + st.smile + (speaking && mood === "neutral" ? 0.035 : 0), 0.055);
+  setBaselineSmooth("eyeSquintLeft", f.squint + st.squint, 0.055);
+  setBaselineSmooth("eyeSquintRight", f.squint + st.squint, 0.055);
+  setBaselineSmooth("browInnerUp", f.brow + st.brow + (speaking ? 0.035 : 0), 0.05);
+  setBaselineSmooth("eyeWideLeft", Math.max(f.wide, st.wide), 0.06);
+  setBaselineSmooth("eyeWideRight", Math.max(f.wide, st.wide), 0.06);
+  setBaselineSmooth("mouthOpen", speaking ? 0 : st.mouth, 0.08);
+
+  humanRaf = requestAnimationFrame(updateHumanFace);
+}
+
+function startHumanMotion() {
+  if (humanMotionStarted) return;
+  humanMotionStarted = true;
+  setHumanState("idle", 0, "inicio");
+  humanRaf = requestAnimationFrame(updateHumanFace);
+  log("expresividad humana: microgestos y estados activos");
+}
+
+function resetSpeechMouth() {
+  for (const k of Object.keys(speechVisemes)) setMtNew(k, 0);
+  speechVisemes = {};
+  ["jawOpen","mouthOpen","mouthClose","mouthFunnel","mouthPucker"].forEach(k => setMtNew(k, 0));
+}
+
+function updateSpeechSupport() {
+  const vowel = Math.max(
+    speechVisemes.viseme_aa || 0,
+    speechVisemes.viseme_E || 0,
+    speechVisemes.viseme_I || 0,
+    speechVisemes.viseme_O || 0,
+    speechVisemes.viseme_U || 0
+  );
+  const round = Math.max(speechVisemes.viseme_O || 0, speechVisemes.viseme_U || 0);
+  const close = Math.max(speechVisemes.viseme_PP || 0, speechVisemes.viseme_FF || 0);
+  setMtNew("jawOpen", Math.min(0.32, vowel * 0.24));
+  setMtNew("mouthOpen", Math.min(0.26, vowel * 0.20));
+  setMtNew("mouthFunnel", Math.min(0.24, round * 0.18));
+  setMtNew("mouthPucker", Math.min(0.22, round * 0.16));
+  setMtNew("mouthClose", Math.min(0.45, close * 0.34));
+}
+
+function applyLiveViseme(key, value) {
+  if (!hasMt(key)) return;
+  let target = clamp01(value);
+  if (key.startsWith("viseme_")) {
+    const name = key.replace("viseme_", "");
+    const gain = VISEME_GAIN[name] ?? 0.82;
+    target = Math.min(1, Math.pow(target, 0.72) * gain * 1.10);
+  }
+  const prev = speechVisemes[key] ?? 0;
+  const alpha = target > prev ? 0.62 : 0.34;
+  const smooth = prev + (target - prev) * alpha;
+  speechVisemes[key] = smooth < 0.012 ? 0 : smooth;
+  Object.assign(head.mtAvatar[key], { newvalue: speechVisemes[key], needsUpdate: true });
+  if (key.startsWith("viseme_")) updateSpeechSupport();
+}
 
 function applyMood(emo) {
   const m = MOOD[emo] || "neutral";
-  if (m !== currentMood) { currentMood = m; try { head.setMood(m); } catch(e){} }
+  if (m !== currentMood) {
+    currentMood = m;
+    faceBaselines = {};
+    try { head.setMood(m); } catch(e){}
+    pulseExpression(m);
+    if (m === "fear") setHumanState("surprised", 2800, "emocion");
+    else if (m === "sad" || m === "angry" || m === "disgust") setHumanState("serious", 3200, "emocion");
+    else if (m === "happy" || m === "love") setHumanState(isSpeakingNow() ? "speaking" : "greeting", 1800, "emocion");
+  }
 }
 
 async function playClip(id, url) {
@@ -142,7 +501,7 @@ async function playClip(id, url) {
     const bytes = Uint8Array.from(atob(data.audio), c => c.charCodeAt(0));
     const audio = await head.audioCtx.decodeAudioData(bytes.buffer);
     if (data.visemes && data.visemes.length) {
-      enqueueAzure(audio, data.visemes, data.vtimes, id);  // labios EXACTOS por visemas
+      enqueueAzure(audio, data.visemes, data.vtimes, data.vdurations, id);  // labios EXACTOS por visemas
     } else {
       enqueueBuffer(audio, id);  // Piper: lip-sync aproximado por HeadAudio
     }
@@ -155,6 +514,7 @@ async function playClip(id, url) {
 let audioQueue = [];
 let currentSrc = null;
 function enqueueBuffer(buffer, id) {
+  setHumanState(isHumanStateActive("explaining") ? "explaining" : "speaking", 2200, "audio");
   audioQueue.push({ buffer, id });
   reportBusy();
   pumpAudio();
@@ -166,7 +526,12 @@ function pumpAudio() {
   src.buffer = buffer;
   if (headaudio) src.connect(headaudio);    // → detección de visemas → labios
   src.connect(head.audioCtx.destination);   // → altavoces
-  src.onended = () => { currentSrc = null; reportBusy(); pumpAudio(); };
+  src.onended = () => {
+    currentSrc = null;
+    if (!audioQueue.length) resetSpeechMouth();
+    reportBusy();
+    pumpAudio();
+  };
   currentSrc = src;
   src.start();
   log("reproduciendo audio " + id + " (" + buffer.duration.toFixed(1) + "s)");
@@ -174,16 +539,25 @@ function pumpAudio() {
 function stopAllAudio() {                    // barge-in
   audioQueue = [];
   if (currentSrc) { try { currentSrc.stop(); } catch(e){} currentSrc = null; }
+  resetSpeechMouth();
   reportBusy();
 }
 
 // ── Reproductor Azure: audio + visemas EXACTOS (animados a mano vía mtAvatar) ──
 const ALL_VIS = ["aa","E","I","O","U","PP","SS","TH","CH","FF","kk","nn","RR","DD","sil"];
-function setViseme(name) {
+function setViseme(name, strength=1) {
+  const gain = VISEME_GAIN[name] ?? 0.82;
   for (const v of ALL_VIS) {
     const o = head.mtAvatar["viseme_" + v];
-    if (o) Object.assign(o, { newvalue: (v === name ? 0.9 : 0), needsUpdate: true });
+    if (o) Object.assign(o, { newvalue: (v === name ? gain * clamp01(strength) : 0), needsUpdate: true });
   }
+  if (name === "sil") {
+    resetSpeechMouth();
+    return;
+  }
+  speechVisemes = {};
+  speechVisemes["viseme_" + name] = gain * clamp01(strength);
+  updateSpeechSupport();
 }
 // Reporta al servidor si el navegador está reproduciendo (para barge-in real)
 let lastBusy = null;
@@ -193,15 +567,16 @@ function reportBusy() {
 }
 
 let azQueue = [], azBusy = false, azSrc = null;
-function enqueueAzure(buffer, visemes, vtimes, id) {
-  azQueue.push({ buffer, visemes, vtimes, id });
+function enqueueAzure(buffer, visemes, vtimes, vdurations, id) {
+  setHumanState(isHumanStateActive("explaining") ? "explaining" : "speaking", 2200, "audio");
+  azQueue.push({ buffer, visemes, vtimes, vdurations: vdurations || [], id });
   reportBusy();
   pumpAzure();
 }
 function pumpAzure() {
   if (azBusy || !azQueue.length) return;
   azBusy = true; reportBusy();
-  const { buffer, visemes, vtimes, id } = azQueue.shift();
+  const { buffer, visemes, vtimes, vdurations, id } = azQueue.shift();
   let src;
   try {
     src = head.audioCtx.createBufferSource();
@@ -213,12 +588,20 @@ function pumpAzure() {
   }
   azSrc = src;
   const start = head.audioCtx.currentTime;
-  let i = 0, cur = "sil";
+  let i = 0, cur = "sil", curAt = 0, curDur = 90;
   function tick() {
     if (azSrc !== src) return;                 // cancelado (barge-in)
     const el = (head.audioCtx.currentTime - start) * 1000;
-    while (i < vtimes.length && vtimes[i] <= el) { cur = visemes[i]; i++; }
-    setViseme(cur);
+    while (i < vtimes.length && vtimes[i] <= el) {
+      cur = visemes[i] || "sil";
+      curAt = vtimes[i] || 0;
+      curDur = Math.max(45, vdurations[i] || ((i + 1 < vtimes.length) ? (vtimes[i + 1] - curAt) : 120));
+      i++;
+    }
+    const p = Math.max(0, Math.min(1, (el - curAt) / curDur));
+    const attack = Math.min(1, p * 5);
+    const release = p > 0.78 ? Math.max(0.55, 1 - (p - 0.78) * 1.8) : 1;
+    setViseme(cur, attack * release);
     if (el < buffer.duration * 1000 + 150) requestAnimationFrame(tick);
     else setViseme("sil");
   }
@@ -233,10 +616,508 @@ function stopAzure() {                         // barge-in
   azBusy = false; setViseme("sil"); reportBusy();
 }
 
+// ── Gestos: el servidor manda un gesto; lo reproducimos una vez ──
+let lastGestureId = null;
+function playGesture(name) {
+  try {
+    if (name === "dance") {
+      // ponytail: TalkingHead no trae baile nativo. Sin un clip Mixamo hacemos
+      // una secuencia simpática. Baile real: head.playAnimation(URL_de_un_.fbx).
+      ["handup","side","shrug","handup"].forEach((g, i) =>
+        setTimeout(() => { try { head.playGesture(g, 2, i % 2 === 1); } catch(e){} }, i * 900));
+    } else {
+      head.playGesture(name, 3, false, 1000);  // gesto, duración(s), espejo, transición(ms)
+    }
+    log("gesto: " + name);
+  } catch (e) { log("gesto ERROR: " + (e && e.message || e)); }
+}
+
+// ── Cámara: presencia + reconocimiento facial (todo en el navegador) ──
+let knownFaces = [];          // [{name, descriptor:Float32Array}]
+let presentBefore = false;
+let pendingEnroll = null;     // nombre a registrar cuando se capte una cara
+let lastEnrollId = null;
+let wantPoseMirror = false;   // imitar tus gestos (se fija desde /state)
+const faceOpts = () => new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.5 });
+
+async function loadKnownFaces() {
+  try {
+    const arr = await (await fetch("/faces", {cache:"no-store"})).json();
+    knownFaces = arr.map(f => ({ name: f.name, descriptor: new Float32Array(f.descriptor) }));
+    log("rostros conocidos: " + knownFaces.length);
+  } catch (e) { knownFaces = []; }
+}
+
+function matchFace(desc) {
+  let best = "", bestDist = 1.0;
+  for (const f of knownFaces) {
+    const d = faceapi.euclideanDistance(desc, f.descriptor);
+    if (d < bestDist) { bestDist = d; best = f.name; }
+  }
+  return bestDist < FACE_THRESHOLD ? best : "";   // "" = desconocido
+}
+
+async function enrollNow(descriptor) {
+  const name = pendingEnroll; pendingEnroll = null;
+  try {
+    await fetch("/enroll", { method: "POST", headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({ name, descriptor: Array.from(descriptor) }) });
+    await loadKnownFaces();   // recargar para reconocerlo desde ya
+    log("rostro registrado: " + name);
+  } catch (e) { log("enroll ERROR: " + (e && e.message || e)); }
+}
+
+async function startCamera() {
+  try {
+    setStatus("Cargando reconocimiento facial…");
+    await faceapi.nets.tinyFaceDetector.loadFromUri(FACE_MODELS);
+    await faceapi.nets.faceLandmark68Net.loadFromUri(FACE_MODELS);
+    await faceapi.nets.faceRecognitionNet.loadFromUri(FACE_MODELS);
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 320, height: 240 } });
+    const video = document.getElementById("cam");
+    video.srcObject = stream;
+    await video.play();
+    await loadKnownFaces();
+    // ponytail: 700 ms basta para presencia y no pelea con el render 3D. Baja si quieres más reflejos.
+    setInterval(() => detectFace(video), 700);
+    log("camara lista");
+    if (wantPoseMirror) startPoseMirror(video);   // imitar tus gestos
+  } catch (e) { log("camara ERROR: " + (e && e.message || e)); }
+}
+
+// ── Imitar tus gestos: MediaPipe Pose → dispara el gesto del avatar ──
+let poseLandmarker = null, lastPose = "", lastPoseTime = 0;
+
+async function startPoseMirror(video) {
+  try {
+    const { PoseLandmarker, FilesetResolver } =
+      await import("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.18");
+    const vision = await FilesetResolver.forVisionTasks(
+      "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.18/wasm");
+    poseLandmarker = await PoseLandmarker.createFromOptions(vision, {
+      // delegate GPU; si el avatar 3D lagea en la Intel UHD, cambia a "CPU".
+      baseOptions: { modelAssetPath: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task", delegate: "GPU" },
+      runningMode: "VIDEO", numPoses: 1,
+    });
+    log("mirror de poses listo");
+    // ponytail: 200 ms (5 fps) basta para imitar gestos; sube si baja el FPS del render.
+    setInterval(() => detectPose(video), 200);
+  } catch (e) { log("mirror ERROR: " + (e && e.message || e)); }
+}
+
+function detectPose(video) {
+  if (!poseLandmarker || video.readyState < 2) return;
+  let res;
+  try { res = poseLandmarker.detectForVideo(video, performance.now()); } catch (e) { return; }
+  const lm = res.landmarks && res.landmarks[0];
+  const pose = lm ? classifyPose(lm) : "";
+  const now = performance.now();
+  if (pose && pose !== lastPose && now - lastPoseTime > 1500) {   // solo al cambiar + cooldown
+    lastPoseTime = now;
+    mirrorGesture(pose);
+  }
+  lastPose = pose;
+}
+
+function classifyPose(lm) {
+  // MediaPipe Pose: 11/12 = hombros, 15/16 = muñecas. y menor = más arriba en la imagen.
+  const vis = (p) => p && (p.visibility === undefined || p.visibility > 0.5);
+  const Lsh = lm[11], Rsh = lm[12], Lwr = lm[15], Rwr = lm[16];
+  if (!vis(Lsh) || !vis(Rsh)) return "";
+  const leftUp  = vis(Lwr) && Lwr.y < Lsh.y;
+  const rightUp = vis(Rwr) && Rwr.y < Rsh.y;
+  if (leftUp && rightUp) return "both_up";
+  if (leftUp || rightUp) return "hand_up";
+  return "";
+}
+
+function mirrorGesture(pose) {
+  log("imito pose: " + pose);
+  if (pose === "both_up") {
+    ["handup","handup"].forEach((g, i) =>
+      setTimeout(() => { try { head.playGesture(g, 2, i === 1); } catch(e){} }, i * 500));
+  } else if (pose === "hand_up") {
+    try { head.playGesture("handup", 3, false, 800); } catch(e){}
+  }
+}
+
+async function detectFace(video) {
+  let det;
+  try {
+    det = await faceapi.detectSingleFace(video, faceOpts()).withFaceLandmarks().withFaceDescriptor();
+  } catch (e) { return; }
+  const present = !!det;
+  if (pendingEnroll && det) enrollNow(det.descriptor);   // captura pedida por "recuérdame como X"
+  if (present && !presentBefore) {                       // alguien ACABA de aparecer
+    const name = matchFace(det.descriptor);
+    fetch("/presence?name=" + encodeURIComponent(name)).catch(()=>{});
+    log("presencia: " + (name || "desconocido"));
+    if (name) geminiTellName(name);                      // Gemini te saluda por tu nombre
+  }
+  presentBefore = present;
+}
+
+// ── GEMINI LIVE: oye + ve + piensa + habla (reemplaza el cerebro/voz viejo) ──
+let gWs = null, gMicCtx = null, gFrameTimer = null, gReconnectTimer = null;
+let gReconnectInProgress = false, gToldNames = new Set(), stateFails = 0;
+const SYS_LIVE = "Eres Sparky, un asistente físico (un tótem) cálido y natural. TIENES CUERPO, CARA y una cámara: " +
+  "VES lo que tienes enfrente, puedes MOVERTE y CAMBIAR TU EXPRESIÓN FACIAL. " +
+  "Tu personalidad: cercano, despierto, humano, con humor suave peruano y trato respetuoso. " +
+  "Habla en español peruano neutral, como alguien de Lima: natural, cálido, sin exagerar jerga; puedes decir 'claro', 'bacán' o 'al toque' solo cuando encaje. " +
+  "No sobreactúes ni digas muchas muletillas. Haz pausas naturales y responde como tótem físico, no como chatbot. " +
+  "Usa play_gesture para gesticular (saludar, aprobar, señalar, dudar, bailar). " +
+  "Usa set_behavior_state para postura y presencia: listening cuando escuchas, thinking cuando procesas, " +
+  "speaking al responder, explaining cuando enseñas o muestras una imagen, greeting al saludar, " +
+  "surprised ante algo inesperado y serious en temas delicados. " +
+  "Usa set_expression para poner la cara acorde a lo que sientes o ves: sonríe (happy) cuando algo es bueno, " +
+  "cara seria (sad) en temas tristes, sorpresa (fear) ante algo inesperado, cariño (love), etc. " +
+  "Cambia la expresión al inicio de la respuesta y cuando cambie el tono emocional; no la llames en cada frase. " +
+  "Mientras hablas mantén una cara viva y coherente, como un humano que escucha y responde. " +
+  "REGLA DE IMÁGENES: SIEMPRE que expliques un tema, lugar, personaje, animal, país o concepto, " +
+  "llama show_visual con un tema claro y específico (p.ej. 'Imperio inca', 'Machu Picchu', 'León africano') " +
+  "para que aparezca una imagen real a tu lado MIENTRAS lo explicas. Es parte de cómo enseñas. " +
+  "Si el usuario pide quitar, ocultar, borrar, sacar o cerrar la imagen (ej. 'quítala', 'ya bórrala', " +
+  "'sácala', 'cierra la imagen', 'quita eso'), DEBES llamar hide_visual de inmediato. " +
+  "Si el usuario te pide buscar, comparar, llenar o revisar algo en una pagina web, puedes llamar " +
+  "start_computer_task con una instruccion concreta. Esa herramienta abre un navegador supervisado; " +
+  "no hagas compras, pagos, envios, aceptes terminos ni cambies cuentas sin confirmacion humana. " +
+  "Para clima, Wikipedia, monedas, feriados, paises, libros y noticias, usa las herramientas gratuitas antes que Computer Use. " +
+  "Hablas español, breve y conversacional. No digas que eres un modelo de lenguaje.";
+
+// Herramienta que Gemini DECIDE usar para mover el avatar (no es determinístico)
+const GESTURE_TOOL = { functionDeclarations:[{
+  name:"play_gesture",
+  description:"Mueve el cuerpo del avatar Sparky. Llámala cuando sea natural en la conversación.",
+  parameters:{ type:"object", properties:{ gesture:{ type:"string",
+    enum:["handup","namaste","thumbup","thumbdown","ok","shrug","index","dance"],
+    description:"handup=levantar la mano/saludar, namaste=saludo formal, thumbup=pulgar arriba, "+
+      "thumbdown=pulgar abajo, ok=señal de ok, shrug=encogerse de hombros, index=señalar, dance=bailar" }},
+    required:["gesture"] }}]};
+
+// Herramienta que Gemini DECIDE usar para cambiar la EXPRESIÓN FACIAL del avatar
+const EXPRESSION_TOOL = { functionDeclarations:[{
+  name:"set_expression",
+  description:"Cambia la expresión facial de Sparky para que la cara acompañe lo que siente o ve.",
+  parameters:{ type:"object", properties:{ emotion:{ type:"string",
+    enum:["neutral","happy","sad","angry","fear","disgust","love","sleep"],
+    description:"happy=sonríe/contento, sad=serio/triste, angry=molesto, fear=sorpresa/susto, "+
+      "love=cariño/ternura, disgust=desagrado, sleep=adormilado, neutral=relajado" }},
+    required:["emotion"] }}]};
+
+// Herramienta de presencia corporal: postura, mirada e intencion conversacional.
+const BEHAVIOR_TOOL = { functionDeclarations:[{
+  name:"set_behavior_state",
+  description:"Cambia el estado corporal de Sparky: mirada, postura, microgestos y presencia humana.",
+  parameters:{ type:"object", properties:{
+    state:{ type:"string",
+      enum:["idle","listening","thinking","speaking","explaining","greeting","surprised","serious"],
+      description:"idle=reposo vivo, listening=escucha activa, thinking=procesa, speaking=habla, explaining=explica o muestra algo, greeting=saluda, surprised=sorpresa, serious=tema serio" },
+    seconds:{ type:"number", description:"Duracion aproximada del estado, entre 1 y 8 segundos." }
+  }, required:["state"] }}]};
+
+// Herramientas que Gemini DECIDE usar para mostrar/ocultar una imagen (Wikipedia, gratis)
+const VISUAL_TOOL = { functionDeclarations:[
+  { name:"show_visual",
+    description:"Muestra una imagen real al lado del avatar para ilustrar lo que explicas. Úsala cuando hablas de algo que se ve mejor con imagen: lugares, personajes históricos, animales, ciencia, países, etc.",
+    parameters:{ type:"object", properties:{ topic:{ type:"string",
+      description:"Tema claro y específico para buscar la imagen en Wikipedia, p.ej. 'Imperio inca', 'Machu Picchu', 'León (animal)', 'Albert Einstein'." }},
+      required:["topic"] }},
+  { name:"hide_visual",
+    description:"Oculta el panel de imagen cuando ya no es relevante o cambias de tema.",
+    parameters:{ type:"object", properties:{} }}
+]};
+
+// Herramientas para tareas web supervisadas por Python + Gemini Computer Use.
+const COMPUTER_TOOL = { functionDeclarations:[
+  { name:"start_computer_task",
+    description:"Inicia una tarea web supervisada en un navegador separado. Usala solo cuando el usuario pida buscar, comparar, revisar o llenar algo en una pagina web.",
+    parameters:{ type:"object", properties:{ task:{ type:"string",
+      description:"Instruccion concreta para el navegador, con objetivo y restricciones. Ejemplo: 'Busca precios actuales de laptops Lenovo para oficina y resume 3 opciones'." }},
+      required:["task"] }},
+  { name:"get_computer_task_status",
+    description:"Consulta el estado de la tarea web supervisada.",
+    parameters:{ type:"object", properties:{} }},
+  { name:"stop_computer_task",
+    description:"Detiene la tarea web supervisada si el usuario lo pide o si ya no hace falta.",
+    parameters:{ type:"object", properties:{} }}
+]};
+
+// Herramientas gratuitas/no-IA: datos reales sin gastar Computer Use.
+const FREE_DATA_TOOL = { functionDeclarations:[
+  { name:"get_weather",
+    description:"Obtiene clima actual por ciudad con Open-Meteo. Usala para clima, temperatura, lluvia, humedad o viento.",
+    parameters:{ type:"object", properties:{
+      city:{ type:"string", description:"Ciudad, por ejemplo Lima, Cusco, Arequipa." },
+      country_code:{ type:"string", description:"Codigo ISO opcional, por ejemplo PE, AR, US." }
+    }, required:["city"] }},
+  { name:"search_wikipedia",
+    description:"Busca un resumen enciclopedico y una imagen en Wikipedia.",
+    parameters:{ type:"object", properties:{
+      topic:{ type:"string", description:"Tema claro, por ejemplo Machu Picchu, Imperio inca, Albert Einstein." },
+      language:{ type:"string", description:"Idioma opcional, por defecto es." }
+    }, required:["topic"] }},
+  { name:"convert_currency",
+    description:"Convierte monedas usando tasas actuales de Frankfurter.",
+    parameters:{ type:"object", properties:{
+      amount:{ type:"number", description:"Monto a convertir." },
+      from_currency:{ type:"string", description:"Moneda origen, por ejemplo USD." },
+      to_currency:{ type:"string", description:"Moneda destino, por ejemplo PEN." }
+    }, required:["amount","from_currency","to_currency"] }},
+  { name:"get_holidays",
+    description:"Consulta feriados publicos de un pais con Nager.Date.",
+    parameters:{ type:"object", properties:{
+      country_code:{ type:"string", description:"Codigo ISO del pais, por ejemplo PE." },
+      year:{ type:"number", description:"Año opcional." }
+    } }},
+  { name:"get_country_info",
+    description:"Obtiene una ficha breve de un pais desde Wikipedia, sin usar APIs pagadas.",
+    parameters:{ type:"object", properties:{
+      country:{ type:"string", description:"Pais, por ejemplo Peru, Argentina, Japon." }
+    }, required:["country"] }},
+  { name:"search_books",
+    description:"Busca libros y autores en Open Library.",
+    parameters:{ type:"object", properties:{
+      query:{ type:"string", description:"Titulo, autor o tema del libro." },
+      limit:{ type:"number", description:"Cantidad de resultados, maximo 5." }
+    }, required:["query"] }},
+  { name:"get_news_brief",
+    description:"Busca noticias recientes abiertas en GDELT sobre un tema.",
+    parameters:{ type:"object", properties:{
+      query:{ type:"string", description:"Tema de noticias, por ejemplo Peru tecnologia, seleccion argentina." },
+      max_records:{ type:"number", description:"Cantidad de articulos, maximo 10." }
+    }, required:["query"] }}
+]};
+
+async function showVisual(topic){
+  try{
+    setHumanState("explaining", 6500, "visual");
+    const u = "https://es.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=" +
+      encodeURIComponent(topic) + "&gsrlimit=1&prop=pageimages&piprop=thumbnail&pithumbsize=600&format=json&origin=*";
+    const d = await (await fetch(u)).json();
+    const pg = Object.values((d.query && d.query.pages) || {})[0];
+    const src = pg && pg.thumbnail && pg.thumbnail.source;
+    if(!src){ log("visual: sin imagen para " + topic); return; }
+    const img = document.getElementById("visualImg"), panel = document.getElementById("visual");
+    img.onload = () => panel.classList.add("show");
+    img.onerror = () => panel.classList.remove("show");
+    img.src = src;
+    document.getElementById("visualCap").textContent = pg.title || topic;
+    log("visual: " + topic + " -> " + (pg.title || ""));
+  }catch(e){ log("visual ERROR: " + (e.message || e)); }
+}
+function hideVisual(){
+  document.getElementById("visual").classList.remove("show");
+  setHumanState(isSpeakingNow() ? "speaking" : "idle", 1200, "ocultar visual");
+}
+
+function gB64(buf){ let s=""; const u=new Uint8Array(buf); const C=0x8000;
+  for(let i=0;i<u.length;i+=C) s+=String.fromCharCode.apply(null,u.subarray(i,i+C)); return btoa(s); }
+
+function cleanupGeminiInputs() {
+  if(gReconnectTimer){ clearTimeout(gReconnectTimer); gReconnectTimer=null; }
+  if(gFrameTimer){ clearInterval(gFrameTimer); gFrameTimer=null; }
+  try { if(gMicCtx) gMicCtx.close(); } catch(e){}
+  gMicCtx = null;
+}
+
+function shouldReconnectGemini(e) {
+  const reason = (e && e.reason || "").toLowerCase();
+  return e && e.code === 1008 && (reason.includes("goaway") || reason.includes("session") || reason.includes("duration"));
+}
+
+function reconnectGemini(reason) {
+  if(gReconnectInProgress) return;
+  gReconnectInProgress = true;
+  log("Gemini: reconectando (" + reason + ")");
+  setStatus("Renovando sesión de Sparky…");
+  cleanupGeminiInputs();
+  const old = gWs;
+  gWs = null;
+  try { if(old){ old.onclose=null; old.close(); } } catch(e){}
+  setTimeout(() => { gReconnectInProgress = false; startGeminiLive(); }, 1200);
+}
+
+function startGeminiLive(){
+  if(!liveCfg || !liveCfg.key){ log("Gemini: falta key"); return; }
+  if(gWs){ log("Gemini: ya hay sesión, no abro otra"); return; }   // evita doble conexión
+  const url = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=" + liveCfg.key;
+  gWs = new WebSocket(url);
+  gWs.onopen = () => {
+    gReconnectTimer = setTimeout(() => reconnectGemini("renovacion preventiva"), 9 * 60 * 1000);
+    gWs.send(JSON.stringify({ setup:{
+      model: "models/" + liveCfg.model,
+      generationConfig: { responseModalities:["AUDIO"] },
+      outputAudioTranscription: {},
+      tools: [ GESTURE_TOOL, EXPRESSION_TOOL, BEHAVIOR_TOOL, VISUAL_TOOL, FREE_DATA_TOOL, COMPUTER_TOOL ],  // gestos, datos, cara, presencia, imagenes y navegador
+      systemInstruction: { parts:[{ text: SYS_LIVE }] },
+    }}));
+    log("Gemini: ws abierto, setup enviado");
+  };
+  gWs.onmessage = onGemini;
+  gWs.onerror = () => log("Gemini: ws error");
+  gWs.onclose = (e) => {
+    log("Gemini: close "+e.code+" "+(e.reason||""));
+    cleanupGeminiInputs();
+    gWs = null;
+    if(shouldReconnectGemini(e)){
+      reconnectGemini("sesion expirada");
+      return;
+    }
+    if(!gReconnectInProgress) setStatus("Gemini cerrado ("+e.code+"). Revisa clave, cuota o red.", true);
+  };
+}
+
+async function onGemini(ev){
+  const text = (ev.data instanceof Blob) ? await ev.data.text() : ev.data;
+  let msg; try { msg = JSON.parse(text); } catch(e){ return; }
+  if(msg.goAway){ reconnectGemini("GoAway recibido"); return; }
+  if(msg.setupComplete){ log("Gemini: setupComplete"); setHumanState("listening", 1800, "setup"); gStartMic(); gStartFrames(); return; }
+  if(msg.toolCall){                                  // Gemini DECIDIÓ moverse
+    setHumanState("thinking", 1800, "herramienta");
+    const resps = [];
+    const freeNames = new Set(["get_weather","search_wikipedia","convert_currency","get_holidays","get_country_info","search_books","get_news_brief"]);
+    for(const fc of (msg.toolCall.functionCalls || [])){
+      if(freeNames.has(fc.name)){
+        const st = await callFreeTool(fc.name, fc.args || {});
+        log("tool gratis " + fc.name + ": " + (st.ok ? "ok" : (st.error || "error")));
+        resps.push({ id: fc.id, name: fc.name, response: st });
+        continue;
+      }
+      if(fc.name === "play_gesture" && fc.args && fc.args.gesture){
+        playGesture(fc.args.gesture);                // reusa el gesto del avatar (TalkingHead)
+        const g = fc.args.gesture;
+        if (g === "handup" || g === "namaste") setHumanState("greeting", 2600, "gesto");
+        else if (g === "index") setHumanState("explaining", 3600, "gesto");
+        else if (g === "shrug") setHumanState("thinking", 2200, "gesto");
+        log("Gemini decidió gesto: " + fc.args.gesture);
+      }
+      if(fc.name === "set_expression" && fc.args && fc.args.emotion){
+        applyMood(fc.args.emotion);                         // mood + microexpresion
+        log("Gemini decidió expresión: " + fc.args.emotion);
+      }
+      if(fc.name === "set_behavior_state" && fc.args && fc.args.state){
+        const seconds = Math.max(1, Math.min(8, Number(fc.args.seconds || 3)));
+        setHumanState(fc.args.state, seconds * 1000, "gemini");
+        log("Gemini decidió estado humano: " + fc.args.state);
+      }
+      if(fc.name === "show_visual" && fc.args && fc.args.topic){
+        showVisual(fc.args.topic);                          // imagen de Wikipedia
+        log("Gemini decidió imagen: " + fc.args.topic);
+      }
+      if(fc.name === "hide_visual"){ hideVisual(); log("Gemini ocultó la imagen"); }
+      if(fc.name === "start_computer_task" && fc.args && fc.args.task){
+        const st = await postAgent("/agent/start", { task: fc.args.task });
+        updateAgentPanel(st);
+        log("Gemini inicio Computer Use: " + st.status);
+        resps.push({ id: fc.id, name: fc.name, response: st });
+        continue;
+      }
+      if(fc.name === "get_computer_task_status"){
+        const st = await (await fetch("/agent/status", {cache:"no-store"})).json();
+        updateAgentPanel(st);
+        resps.push({ id: fc.id, name: fc.name, response: st });
+        continue;
+      }
+      if(fc.name === "stop_computer_task"){
+        const st = await postAgent("/agent/stop");
+        updateAgentPanel(st);
+        log("Gemini detuvo Computer Use: " + st.status);
+        resps.push({ id: fc.id, name: fc.name, response: st });
+        continue;
+      }
+      resps.push({ id: fc.id, name: fc.name, response: { result: "ok" } });
+    }
+    if(gWs && gWs.readyState===1) gWs.send(JSON.stringify({ toolResponse:{ functionResponses: resps } }));
+    return;
+  }
+  const sc = msg.serverContent; if(!sc) return;
+  if(sc.interrupted){ stopAllAudio(); setHumanState("listening", 1400, "interrupcion"); log("Gemini: interrumpido (barge-in)"); }
+  for(const p of ((sc.modelTurn&&sc.modelTurn.parts)||[])){
+    if(p.inlineData && p.inlineData.data) gPlay(p.inlineData.data);
+  }
+}
+
+// audio de Gemini (24kHz PCM16) → AudioBuffer → enqueueBuffer (HeadAudio mueve labios)
+let gId = 0;
+function gPlay(b64data){
+  awaitingAssistant = false;
+  setHumanState(isHumanStateActive("explaining") ? "explaining" : "speaking", 2200, "audio");
+  const bin = atob(b64data); const u8 = new Uint8Array(bin.length);
+  for(let i=0;i<bin.length;i++) u8[i] = bin.charCodeAt(i);
+  const i16 = new Int16Array(u8.buffer);
+  const f32 = new Float32Array(i16.length);
+  for(let i=0;i<i16.length;i++) f32[i] = i16[i] / 32768;
+  const buf = head.audioCtx.createBuffer(1, f32.length, 24000);
+  buf.copyToChannel(f32, 0);
+  enqueueBuffer(buf, "gem" + (gId++));   // reusa el pipeline de lip-sync por audio
+}
+
+async function gStartMic(){
+  try{
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio:{ echoCancellation:true, noiseSuppression:true, autoGainControl:true, channelCount:1 } });
+    gMicCtx = new AudioContext({ sampleRate:16000 });
+    const src = gMicCtx.createMediaStreamSource(stream);
+    const proc = gMicCtx.createScriptProcessor(4096,1,1);
+    const mute = gMicCtx.createGain(); mute.gain.value = 0;
+    src.connect(proc); proc.connect(mute); mute.connect(gMicCtx.destination);
+    proc.onaudioprocess = (e) => {
+      if(!gWs || gWs.readyState!==1) return;
+      const f = e.inputBuffer.getChannelData(0);
+      observeUserAudio(f);
+      const i16 = new Int16Array(f.length);
+      for(let i=0;i<f.length;i++){ const s=Math.max(-1,Math.min(1,f[i])); i16[i]= s<0 ? s*0x8000 : s*0x7FFF; }
+      gWs.send(JSON.stringify({ realtimeInput:{ audio:{ data:gB64(i16.buffer), mimeType:"audio/pcm;rate=16000" } } }));
+    };
+    log("Gemini: micrófono activo (con cancelación de eco)");
+  }catch(e){ setStatus("No se pudo abrir el micrófono: "+(e.message||e),true); }
+}
+
+// reusa la webcam ya abierta (el <video> de face-api) → 1 frame/seg a Gemini
+function gStartFrames(){
+  const v = document.getElementById("cam");
+  const cv = document.createElement("canvas"); cv.width=640; cv.height=480;
+  const ctx = cv.getContext("2d");
+  gFrameTimer = setInterval(() => {
+    if(!gWs || gWs.readyState!==1 || !v || v.readyState<2) return;
+    ctx.drawImage(v,0,0,640,480);
+    const jpeg = cv.toDataURL("image/jpeg",0.6).split(",")[1];
+    gWs.send(JSON.stringify({ realtimeInput:{ video:{ data:jpeg, mimeType:"image/jpeg" } } }));
+  }, 1000);
+  log("Gemini: enviando cámara (1 frame/seg)");
+}
+
+// Apaga la sesión de Gemini (cuando el servidor Python muere → evita ventana zombi hablando)
+function shutdownGemini(){
+  cleanupGeminiInputs();
+  try { if(gWs){ gWs.onclose=null; gWs.close(); } } catch(e){}
+  gWs=null;
+  stopAllAudio();
+  log("Gemini: sesión apagada (servidor cerrado)");
+  setStatus("Sparky en pausa (servidor cerrado). Recarga cuando vuelva a iniciar.", true);
+}
+
+// face-api te reconoce → se lo decimos a Gemini para que te salude por tu nombre
+function geminiTellName(name){
+  if(!gWs || gWs.readyState!==1 || gToldNames.has(name)) return;
+  gToldNames.add(name);
+  setHumanState("greeting", 4500, "presencia");
+  gWs.send(JSON.stringify({ clientContent:{ turns:[{ role:"user", parts:[
+    { text:"(Sistema: la persona frente a ti se llama " + name + ". Salúdala por su nombre con naturalidad.)" }
+  ]}], turnComplete:true }}));
+  log("Gemini: avisado de que es " + name);
+}
+
 function startSpeakLoop() {
   setInterval(async () => {
     try {
       const s = await (await fetch("/state", {cache:"no-store"})).json();
+      if (clientInstanceId && s.instance_id && s.instance_id !== clientInstanceId) {
+        shutdownGemini();
+        stateFails = 999;
+        return;
+      }
+      stateFails = 0;                    // servidor vivo
       if (lastGen === null) lastGen = s.gen;
       if (s.gen !== lastGen) {           // barge-in: Sparky debe callarse
         lastGen = s.gen;
@@ -244,13 +1125,33 @@ function startSpeakLoop() {
         stopAllAudio();                  // Piper (buffer-source)
         try { head.stopSpeaking(); } catch(e){}
       }
+      if (s.gesture_id !== undefined && s.gesture_id !== null) {
+        if (lastGestureId === null) lastGestureId = s.gesture_id;   // ignora gestos previos al cargar
+        else if (s.gesture_id !== lastGestureId) {
+          lastGestureId = s.gesture_id;
+          if (s.gesture) playGesture(s.gesture);
+        }
+      }
+      if (s.enroll_id !== undefined && s.enroll_id !== null) {
+        if (lastEnrollId === null) lastEnrollId = s.enroll_id;      // ignora peticiones previas
+        else if (s.enroll_id !== lastEnrollId) {
+          lastEnrollId = s.enroll_id;
+          pendingEnroll = s.enroll || "amigo";   // la próxima cara detectada se guarda con este nombre
+          log("captura de rostro pedida: " + pendingEnroll);
+        }
+      }
       if (s.emotion) applyMood(s.emotion);
+      updateAgentPanel(s.computer);
       for (const clip of (s.audio || [])) {
         if (playedIds.has(clip.id)) continue;
         playedIds.add(clip.id);          // marcar antes del await (evita doble fetch)
         playClip(clip.id, clip.url);
       }
-    } catch (e) { /* servidor ocupado */ }
+    } catch (e) {
+      // Si /state falla varias veces seguidas, el servidor Python murió (lo apagaste).
+      // Apagamos Gemini para que esta ventana no quede de "zombi" hablando sola.
+      if (gWs && ++stateFails >= 12) shutdownGemini();   // ~1.8 s sin servidor
+    }
   }, 150);
 }
 

@@ -1,5 +1,11 @@
 # Entorno virtual
 venv/
+.venv/
+
+# Variables locales / credenciales
+.env
+.env.*
+!.env.example
 
 # Caché de Python
 __pycache__/
@@ -16,6 +22,8 @@ sparky/secrets.py
 
 # Config local de herramientas/editor
 .claude/
+.codex/
+.agents/
 
 # Zip redundante de Piper (la versión extraída vive en piper/piper/)
 piper/piper.zip

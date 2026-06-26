@@ -23,12 +23,17 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from rich import print as rprint
 from sparky.config import (
     AVATAR_ENABLED, AVATAR_PORT, AVATAR_KIOSK, AVATAR_3D, SPARKY_NAME, TTS_ENGINE,
+    CAMERA_ENABLED, FACES_FILE, POSE_MIRROR_ENABLED,
+    GEMINI_API_KEY, GEMINI_LIVE_MODEL, GEMINI_LIVE,
 )
+from sparky.computer_agent import ComputerAgent
+from sparky.free_tools import call_free_tool
 
 _LOG_FILE = Path(__file__).parent.parent / "avatar.log"
 
 _HTML = (Path(__file__).parent / "avatar.html").read_text(encoding="utf-8")
 _HTML_3D = (Path(__file__).parent / "avatar3d.html").read_text(encoding="utf-8")
+_HTML_LIVE = (Path(__file__).parent / "live.html").read_text(encoding="utf-8")
 
 # Rutas típicas de Chrome en Windows para el modo kiosko
 _CHROME_PATHS = [
@@ -44,6 +49,7 @@ class SparkyAvatar:
         self.voice = voice
         self.brain = brain
         self._server = None
+        self._instance_id = str(int(time.time() * 1000))
 
         # Cola de audio para reproducir en el navegador (modo 3D)
         self._audio = []                 # [{id, data(bytes)}] aún no servidos al navegador
@@ -52,8 +58,63 @@ class SparkyAvatar:
         self._audio_lock = threading.Lock()
         self._busy = False               # ¿el navegador está reproduciendo ahora mismo?
 
+        # Gesto pendiente (se reproduce una vez; el id sube en cada orden)
+        self._gesture = None
+        self._gesture_id = 0
+
+        # Cámara: rostros conocidos [{name, descriptor[128]}], presencia y enrolamiento
+        self._faces = self._load_faces()
+        self._presence = None            # nombre (o "") de quien acaba de aparecer; lo lee main
+        self._enroll = None              # nombre a registrar cuando el navegador capture la cara
+        self._enroll_id = 0
+        self.computer_agent = ComputerAgent()
+
     def browser_busy(self):
         return self._busy
+
+    def play_gesture(self, name):
+        """Encola un gesto para que el navegador lo reproduzca una vez."""
+        with self._audio_lock:
+            self._gesture = name
+            self._gesture_id += 1
+
+    # ── Cámara: presencia + reconocimiento facial ────────────
+
+    def _load_faces(self):
+        if FACES_FILE.exists():
+            try:
+                return json.loads(FACES_FILE.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                pass
+        return []
+
+    def set_presence(self, name):
+        """El navegador avisa que alguien apareció (name="" si es desconocido)."""
+        with self._audio_lock:
+            self._presence = name
+
+    def pop_presence(self):
+        """Devuelve (y limpia) el nombre de quien apareció, o None si no hay nada nuevo."""
+        with self._audio_lock:
+            p, self._presence = self._presence, None
+            return p
+
+    def request_enroll(self, name):
+        """Pide al navegador capturar el rostro actual y guardarlo como `name`."""
+        with self._audio_lock:
+            self._enroll = name
+            self._enroll_id += 1
+
+    def add_face(self, name, descriptor):
+        """Guarda (o reemplaza) un rostro. Lo llama el POST /enroll del navegador."""
+        with self._audio_lock:
+            self._faces = [f for f in self._faces if f["name"] != name]
+            self._faces.append({"name": name, "descriptor": descriptor})
+            faces = list(self._faces)
+        try:
+            FACES_FILE.write_text(json.dumps(faces, ensure_ascii=False), encoding="utf-8")
+        except OSError:
+            pass
 
     # ── Cola de audio (navegador reproduce → HeadAudio lip-sync) ──
 
@@ -85,10 +146,17 @@ class SparkyAvatar:
         with self._audio_lock:
             pending = [{"id": c["id"], "url": f"/audio/{c['id']}"} for c in self._audio]
             gen = self._gen
+            gesture, gesture_id = self._gesture, self._gesture_id
+            enroll, enroll_id = self._enroll, self._enroll_id
         return {"speaking": speaking, "emotion": emotion, "name": SPARKY_NAME,
-                "gen": gen, "audio": pending, "tts": TTS_ENGINE}
+                "instance_id": self._instance_id,
+                "gen": gen, "audio": pending, "tts": TTS_ENGINE,
+                "gesture": gesture, "gesture_id": gesture_id,
+                "enroll": enroll, "enroll_id": enroll_id, "camera": CAMERA_ENABLED,
+                "pose_mirror": POSE_MIRROR_ENABLED,
+                "computer": self.computer_agent.status()}
 
-    def start(self):
+    def start(self, open_path=None):
         if not AVATAR_ENABLED:
             return
         avatar = self
@@ -142,9 +210,28 @@ class SparkyAvatar:
                     self.end_headers()
                     self.wfile.write(body)
                     return
+                elif self.path.startswith("/faces"):
+                    body = json.dumps(avatar._faces).encode("utf-8")
+                    ctype = "application/json"
+                elif self.path.startswith("/presence"):
+                    name = parse_qs(urlparse(self.path).query).get("name", [""])[0]
+                    avatar.set_presence(name)
+                    body = b"ok"
+                    ctype = "text/plain"
+                elif self.path.startswith("/agent/status"):
+                    body = json.dumps(avatar.computer_agent.status()).encode("utf-8")
+                    ctype = "application/json"
                 elif self.path.startswith("/state"):
                     body = json.dumps(avatar._state()).encode("utf-8")
                     ctype = "application/json"
+                elif self.path.startswith("/live_config"):
+                    body = json.dumps({"key": GEMINI_API_KEY, "model": GEMINI_LIVE_MODEL,
+                                       "name": SPARKY_NAME, "gemini_live": GEMINI_LIVE,
+                                       "instance_id": avatar._instance_id}).encode("utf-8")
+                    ctype = "application/json"
+                elif self.path.startswith("/live"):
+                    body = _HTML_LIVE.encode("utf-8")
+                    ctype = "text/html; charset=utf-8"
                 elif self.path.startswith("/3d"):
                     body = _HTML_3D.encode("utf-8")
                     ctype = "text/html; charset=utf-8"
@@ -163,6 +250,65 @@ class SparkyAvatar:
                 except Exception:
                     pass
 
+            def do_POST(self):
+              try:
+                if self.path.startswith("/enroll"):
+                    length = int(self.headers.get("Content-Length", 0))
+                    obj = json.loads(self.rfile.read(length).decode("utf-8"))
+                    avatar.add_face(obj["name"], obj["descriptor"])
+                    body = b"ok"
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/plain")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                elif self.path.startswith("/agent/start"):
+                    length = int(self.headers.get("Content-Length", 0))
+                    obj = json.loads(self.rfile.read(length).decode("utf-8") or "{}")
+                    body = json.dumps(avatar.computer_agent.start_task(obj.get("task", ""))).encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.send_header("Cache-Control", "no-store")
+                    self.end_headers()
+                    self.wfile.write(body)
+                elif self.path.startswith("/agent/confirm"):
+                    length = int(self.headers.get("Content-Length", 0))
+                    obj = json.loads(self.rfile.read(length).decode("utf-8") or "{}")
+                    body = json.dumps(avatar.computer_agent.confirm(bool(obj.get("approved")))).encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.send_header("Cache-Control", "no-store")
+                    self.end_headers()
+                    self.wfile.write(body)
+                elif self.path.startswith("/agent/stop"):
+                    body = json.dumps(avatar.computer_agent.stop()).encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.send_header("Cache-Control", "no-store")
+                    self.end_headers()
+                    self.wfile.write(body)
+                elif self.path.startswith("/tools/call"):
+                    length = int(self.headers.get("Content-Length", 0))
+                    obj = json.loads(self.rfile.read(length).decode("utf-8") or "{}")
+                    result = call_free_tool(obj.get("name", ""), obj.get("args", {}))
+                    body = json.dumps(result, ensure_ascii=False).encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.send_header("Cache-Control", "no-store")
+                    self.end_headers()
+                    self.wfile.write(body)
+                else:
+                    self.send_error(404)
+              except Exception as e:
+                try:
+                    self.send_error(500, str(e))
+                except Exception:
+                    pass
+
         # En Windows, SO_REUSEADDR deja que DOS servidores tomen el mismo puerto
         # y el navegador se engancha al fantasma. Lo desactivamos para fallar claro.
         ThreadingHTTPServer.allow_reuse_address = False
@@ -174,7 +320,8 @@ class SparkyAvatar:
             return
         threading.Thread(target=self._server.serve_forever, daemon=True).start()
 
-        url = f"http://127.0.0.1:{AVATAR_PORT}/" + ("3d" if AVATAR_3D else "")
+        path = open_path if open_path is not None else ("3d" if AVATAR_3D else "")
+        url = f"http://127.0.0.1:{AVATAR_PORT}/" + path
         rprint(f"[dim]Avatar: {url}[/dim]")
         self._open_browser(url)
 
@@ -188,7 +335,9 @@ class SparkyAvatar:
                 try:
                     subprocess.Popen([chrome, "--kiosk", "--noerrdialogs",
                                       "--disable-infobars",
-                                      "--autoplay-policy=no-user-gesture-required", url])
+                                      "--autoplay-policy=no-user-gesture-required",
+                                      "--use-fake-ui-for-media-stream",  # auto-acepta la cámara (kiosko)
+                                      url])
                     return
                 except Exception:
                     pass

@@ -14,13 +14,36 @@ Barge-in:
     on_recording_start → voice.stop_speaking() → Sparky se calla → escucha
 """
 
+import re
+import time
+import threading
 from rich import print as rprint
-from sparky.config import LOCAL_MODEL, CLOUD_ENABLED, CLOUD_MODEL, SPARKY_NAME, TOTEM_MODE
+from sparky.config import (
+    LOCAL_MODEL, CLOUD_ENABLED, CLOUD_MODEL, SPARKY_NAME, TOTEM_MODE,
+    CAMERA_ENABLED, PRESENCE_GREET_COOLDOWN,
+)
 from sparky.memory import SparkyMemory
 from sparky.brain import SparkyBrain
 from sparky.voice import SparkyVoice
 from sparky.listener import SparkyListener
 from sparky.avatar import SparkyAvatar
+from sparky.gestures import detect_gesture
+from sparky.config import GEMINI_LIVE
+
+
+def main_gemini_live():
+    """Modo Gemini Live: el navegador (avatar3d.html) hace TODO — oye, ve, piensa y
+    habla vía Gemini Live. Python solo sirve el avatar y se queda vivo."""
+    rprint(f"\n[bold magenta]═══ {SPARKY_NAME} — Gemini Live ═══[/bold magenta]")
+    rprint("[dim]El navegador maneja voz + visión vía Gemini. Ctrl+C para salir.[/dim]")
+    avatar = SparkyAvatar()
+    avatar.start()                 # sirve y abre /3d (que ahora arranca Gemini Live)
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        avatar.shutdown()
+        rprint("\n[dim]Sparky cerrado.[/dim]")
 
 
 def main():
@@ -44,6 +67,29 @@ def main():
 
     # Lanzar la cara en pantalla (lee voice.is_speaking y brain.last_emotion)
     avatar.start()
+
+    # ── Saludo por presencia (cámara) ────────────────────────
+    # El navegador detecta cuando alguien aparece y avisa; un hilo lo saluda.
+    # ponytail: hilo simple con cooldown; saluda solo si Sparky no está hablando.
+    # Si NO hay AEC/auriculares, el saludo entra por el micro como eco (ver BARGE_IN).
+    def presence_watcher():
+        last_greet = {}  # nombre → instante del último saludo
+        while True:
+            time.sleep(0.5)
+            name = avatar.pop_presence()
+            if name is None or voice.is_speaking:
+                continue
+            now = time.time()
+            if now - last_greet.get(name, 0) < PRESENCE_GREET_COOLDOWN:
+                continue
+            last_greet[name] = now
+            if name:
+                voice.speak_now(f"Hola {name}, qué bueno verte de nuevo.")
+            else:
+                voice.speak_now("Hola, soy Sparky. Si quieres que te reconozca, dime: recuérdame como tu nombre.")
+
+    if CAMERA_ENABLED:
+        threading.Thread(target=presence_watcher, daemon=True).start()
 
     rprint("[dim]Escribe texto o presiona Enter para modo microfono continuo[/dim]")
     rprint("[dim]En modo mic: habla naturalmente, interrumpe a Sparky cuando quieras[/dim]\n")
@@ -97,6 +143,20 @@ def main():
                 rprint("[bold magenta]⌨️ Modo teclado activado.[/bold magenta]")
                 continue
 
+            # ── Comando: registrar rostro ("recuérdame como X") ──
+            # Exige "como" y toma la palabra siguiente (evita agarrar muletillas como "ya").
+            m = re.search(r"recu[eé]rdame\s+como\s+([a-záéíóúñ]+)", user_text.lower())
+            if m:
+                name = m.group(1).capitalize()
+                avatar.request_enroll(name)
+                voice.speak_now(f"Mírame a la cámara un momento, {name}.")
+                continue
+
+            # ── Gesto por voz: "levanta la mano", "baila", etc. ──
+            gesture = detect_gesture(user_text)
+            if gesture:
+                avatar.play_gesture(gesture)
+
             # ── PROCESSING: Pensar y responder ───────────────
             rprint("[yellow]Sparky esta pensando...[/yellow]")
 
@@ -128,4 +188,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    main_gemini_live() if GEMINI_LIVE else main()

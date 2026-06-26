@@ -34,8 +34,7 @@ from rich import print as rprint
 from sparky.config import (
     VOICE_ENABLED, VOICE_RATE, PIPER_EXE, PIPER_MODEL,
     PIPER_SENTENCE_SILENCE, PIPER_TMP, FILLER_ENABLED, FILLER_PHRASES, AVATAR_3D,
-    TTS_ENGINE, RIVA_SERVER, RIVA_FUNCTION_ID, RIVA_VOICE, RIVA_LANGUAGE,
-    RIVA_SAMPLE_RATE, CLOUD_API_KEY,
+    TTS_ENGINE,
     AZURE_SPEECH_REGION, AZURE_VOICE, AZURE_SPEECH_KEY,
 )
 
@@ -69,10 +68,6 @@ class SparkyVoice:
         # Modo 3D: el audio se reproduce en el navegador (para lip-sync HeadAudio)
         self._avatar = None
         self._speech_end = 0.0                # instante estimado de fin de habla (modo navegador)
-
-        # Chatterbox vía NVIDIA Riva (voz natural). Si falla, cae a Piper.
-        self._riva = None                     # servicio Riva (lazy)
-        self._use_riva = (TTS_ENGINE == "riva")
 
         # Azure Speech: voz humana + visemas (labios exactos). Si falla, cae a Piper.
         self._azure = None                    # SpeechSynthesizer (lazy)
@@ -199,42 +194,6 @@ class SparkyVoice:
         else:
             self._play_file(path)
 
-    # ── Chatterbox vía NVIDIA Riva (gRPC) ────────────────────
-
-    def _riva_service(self):
-        if self._riva is None:
-            import riva.client  # dep: nvidia-riva-client
-            auth = riva.client.Auth(
-                uri=RIVA_SERVER, use_ssl=True,
-                metadata_args=[
-                    ["function-id", RIVA_FUNCTION_ID],
-                    ["authorization", "Bearer " + CLOUD_API_KEY],
-                ],
-            )
-            self._riva = riva.client.SpeechSynthesisService(auth)
-        return self._riva
-
-    def _synth_riva(self, text):
-        """Sintetiza con Chatterbox. Devuelve bytes WAV, o None si falla (→ Piper)."""
-        try:
-            import riva.client
-            resp = self._riva_service().synthesize(
-                text, voice_name=RIVA_VOICE, language_code=RIVA_LANGUAGE,
-                encoding=riva.client.AudioEncoding.LINEAR_PCM,
-                sample_rate_hz=RIVA_SAMPLE_RATE,
-            )
-            buf = io.BytesIO()
-            with wave.open(buf, "wb") as wf:
-                wf.setnchannels(1)
-                wf.setsampwidth(2)
-                wf.setframerate(RIVA_SAMPLE_RATE)
-                wf.writeframes(resp.audio)
-            return buf.getvalue()
-        except Exception as e:
-            rprint(f"[dim yellow]Chatterbox/Riva falló ({e}); usando Piper[/dim yellow]")
-            self._use_riva = False  # no reintentar el resto de la sesión
-            return None
-
     # ── Azure Speech (voz humana + visemas) ──────────────────
 
     def _azure_synth(self):
@@ -345,16 +304,6 @@ class SparkyVoice:
                     if self._wait_ready(path):
                         self._emit(path)
                         self._wait_browser_done()
-            elif self._use_riva:
-                wav = self._synth_riva(text)
-                if wav:
-                    self._emit_bytes(wav)
-                    self._wait_browser_done()
-                elif self.engine_name == "piper":      # Riva falló → Piper
-                    path = self._synth(text)
-                    if self._wait_ready(path):
-                        self._emit(path)
-                        self._wait_browser_done()
             elif self.engine_name == "piper":
                 path = self._synth(text)
                 if self._wait_ready(path):
@@ -403,8 +352,6 @@ class SparkyVoice:
         s = sentence.strip()
         if self._use_azure:
             self._play_queue.put(("azure", s))         # se sintetiza en el worker
-        elif self._use_riva:
-            self._play_queue.put(("riva", s))          # se sintetiza en el worker
         elif self.engine_name == "piper":
             self._play_queue.put(self._synth(s))       # ruta del WAV (síntesis ya iniciada)
         else:
@@ -481,14 +428,6 @@ class SparkyVoice:
                             path = self._synth(item[1])
                             if self._wait_ready(path):
                                 self._emit(path)
-                    elif item[0] == "riva":
-                        wav = self._synth_riva(item[1])
-                        if wav:
-                            self._emit_bytes(wav)
-                        else:                          # Riva falló → Piper
-                            path = self._synth(item[1])
-                            if self._wait_ready(path):
-                                self._emit(path)
                     else:                              # fallback pyttsx3
                         self._pyttsx3_speak(item[1])
                 else:
@@ -496,7 +435,12 @@ class SparkyVoice:
                         self._emit(item)
             except Exception as e:
                 rprint(f"[dim red]Error TTS: {e}[/dim red]")
-        self._is_speaking.clear()
+        # En modo navegador el worker solo ENCOLA: Chrome sigue sonando después.
+        # Marcar fin aquí dejaría is_speaking=False durante la reproducción y el
+        # barge-in moriría (el callback ve "no está hablando"). finish_speaking/
+        # stop_speaking lo limpian tras esperar al navegador.
+        if not self._to_browser:
+            self._is_speaking.clear()
 
     # ── Fallback pyttsx3 ─────────────────────────────────────
 

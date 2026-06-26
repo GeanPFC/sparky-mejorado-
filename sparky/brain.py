@@ -14,7 +14,7 @@ from rich import print as rprint
 from sparky.config import (
     LOCAL_MODEL, LOCAL_OPTIONS, LOCAL_ENABLED, MAX_HISTORY_MESSAGES,
     CLOUD_ENABLED, CLOUD_API_URL, CLOUD_API_KEY,
-    CLOUD_MODEL, CLOUD_MAX_TOKENS, CLOUD_TEMPERATURE, CLOUD_TIMEOUT,
+    CLOUD_MODEL, CLOUD_MAX_TOKENS, CLOUD_TEMPERATURE, CLOUD_TIMEOUT, CLOUD_EXTRA,
 )
 from sparky.emotions import parse_emotion, format_emotion, get_emotion_color
 
@@ -141,6 +141,7 @@ class SparkyBrain:
             "temperature": CLOUD_TEMPERATURE,
             "top_p": 0.95,
             "stream": True,
+            **CLOUD_EXTRA,   # apaga el razonamiento en modelos Nemotron
         }
 
         try:
@@ -223,7 +224,7 @@ class SparkyBrain:
                          "Accept": "application/json"},
                 json={"model": CLOUD_MODEL, "messages": messages,
                       "max_tokens": CLOUD_MAX_TOKENS, "temperature": CLOUD_TEMPERATURE,
-                      "top_p": 0.95},
+                      "top_p": 0.95, **CLOUD_EXTRA},
                 timeout=CLOUD_TIMEOUT,
             )
             if resp.status_code != 200:

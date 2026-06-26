@@ -1,11 +1,11 @@
-"""Test de imports para Sparky v3.0"""
+"""Test de imports para Sparky."""
 import sys, io
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
-print("--- Sparky v3.0 Import Test ---\n")
+print("--- Sparky Import Test ---\n")
 
 tests = [
-    ("config", "from sparky.config import WAKE_WORD_ENABLED, VAD_ENERGY_THRESHOLD"),
+    ("config", "from sparky.config import STT_MODEL, STT_LANGUAGE, GEMINI_LIVE, AVATAR_PORT"),
     ("emotions", "from sparky.emotions import parse_emotion"),
     ("memory", "from sparky.memory import SparkyMemory"),
     ("brain", "from sparky.brain import SparkyBrain"),
@@ -14,7 +14,10 @@ tests = [
     ("sounddevice", "import sounddevice"),
     ("numpy", "import numpy"),
     ("faster_whisper", "import faster_whisper"),
-    ("openwakeword", "import openwakeword"),
+    ("RealtimeSTT", "import RealtimeSTT"),
+    ("azure_speech", "import azure.cognitiveservices.speech"),
+    ("google_genai", "from google import genai"),
+    ("playwright", "import playwright"),
     ("requests", "import requests"),
 ]
 
