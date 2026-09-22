@@ -28,6 +28,20 @@ Micrófono → STT (RealtimeSTT/Whisper) → Cerebro (LLM nube/local) → Voz (P
 | `avatar.html` | Cara 2D estilizada (alternativa, `AVATAR_3D=False`) |
 | `emotions.py` / `memory.py` | Emociones y memoria persistente |
 
+## Modo Lima Expresa (asesor comercial)
+
+Con `GEMINI_LIVE = True` el tótem actúa como vendedor de Lima Expresa: pregunta de qué
+distrito viene el visitante, muestra datos reales de la encuesta Origen-Destino (2018) en
+una tarjeta minimalista, camina a un lado para presentarla y cierra invitando a afiliarse.
+
+- **Datos:** la encuesta no se versiona (es del cliente). Genérala una vez en el tótem:
+  `python -m sparky.od_data build "ruta\Origen -Destino-V01.xlsx"` → `sparky/data/od.json`.
+  Autoprueba: `python -m sparky.od_data`.
+- **Herramientas Gemini:** `consultar_encuesta_od` (distrito / tema / plaza), `ocultar_datos`, `caminar`.
+- **Claves** en `sparky/secrets.py`: `GEMINI_API_KEY` (obligatoria), `SIMLI_API_KEY`
+  (opcional: cara fotorrealista, solo busto; se activa con `SIMLI_ENABLED = True`).
+- Lo que dice el avatar queda en `avatar.log` (líneas `dijo:`) para revisar el discurso.
+
 ## Requisitos
 
 - Python 3.13, Windows

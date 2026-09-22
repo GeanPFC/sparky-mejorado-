@@ -97,6 +97,16 @@ GEMINI_LIVE_MODEL = "gemini-3.1-flash-live-preview"   # probado: audio nativo + 
 # main.py NO arranca el pipeline viejo; el navegador hace todo. Pon False para volver al viejo.
 GEMINI_LIVE = True
 
+# ── Avatar fotorrealista (Simli: video real con labios del audio de Gemini) ──
+# Se activa solo si hay SIMLI_API_KEY en secrets.py. Sin clave → avatar 3D de siempre.
+# Rostro propio (p.ej. asesora con uniforme Lima Expresa): súbelo en app.simli.com y pega su faceId.
+try:
+    from sparky.secrets import SIMLI_API_KEY
+except ImportError:
+    SIMLI_API_KEY = os.environ.get("SIMLI_API_KEY", "")
+SIMLI_FACE_ID = "d2a5c7c6-fed9-4f55-bcb3-062f7cd20103"   # preset "Kate" de Simli; cámbialo por el tuyo
+SIMLI_ENABLED = False   # Simli = solo cara (busto). False: avatar 3D de cuerpo completo que camina y gesticula
+
 # ── Computer Use (Gemini 3.5 Flash controla un navegador supervisado) ──
 # Apagado por defecto: se integra como habilidad opcional, no reemplaza Gemini Live.
 COMPUTER_USE_ENABLED = False

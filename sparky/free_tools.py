@@ -12,6 +12,7 @@ from urllib.parse import quote
 import requests
 
 from sparky.config import FREE_TOOLS_CACHE_SECONDS, FREE_TOOLS_ENABLED, FREE_TOOLS_TIMEOUT
+from sparky.od_data import consultar_encuesta
 
 
 try:
@@ -38,6 +39,7 @@ def call_free_tool(name, args):
         "get_country_info": get_country_info,
         "search_books": search_books,
         "get_news_brief": get_news_brief,
+        "consultar_encuesta_od": consultar_encuesta,
     }
     handler = handlers.get(name)
     if not handler:

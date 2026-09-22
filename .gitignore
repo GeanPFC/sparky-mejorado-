@@ -27,3 +27,6 @@ sparky/secrets.py
 
 # Zip redundante de Piper (la versión extraída vive en piper/piper/)
 piper/piper.zip
+
+# Datos del cliente (encuesta OD Lima Expresa) — se generan en el tótem, no se publican
+sparky/data/

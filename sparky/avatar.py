@@ -24,8 +24,9 @@ from rich import print as rprint
 from sparky.config import (
     AVATAR_ENABLED, AVATAR_PORT, AVATAR_KIOSK, AVATAR_3D, SPARKY_NAME, TTS_ENGINE,
     CAMERA_ENABLED, FACES_FILE, POSE_MIRROR_ENABLED,
-    GEMINI_API_KEY, GEMINI_LIVE_MODEL, GEMINI_LIVE,
+    GEMINI_API_KEY, GEMINI_LIVE_MODEL, GEMINI_LIVE, SIMLI_API_KEY, SIMLI_FACE_ID, SIMLI_ENABLED,
 )
+import requests
 from sparky.computer_agent import ComputerAgent
 from sparky.free_tools import call_free_tool
 
@@ -227,7 +228,16 @@ class SparkyAvatar:
                 elif self.path.startswith("/live_config"):
                     body = json.dumps({"key": GEMINI_API_KEY, "model": GEMINI_LIVE_MODEL,
                                        "name": SPARKY_NAME, "gemini_live": GEMINI_LIVE,
-                                       "instance_id": avatar._instance_id}).encode("utf-8")
+                                       "instance_id": avatar._instance_id,
+                                       "simli": SIMLI_ENABLED and bool(SIMLI_API_KEY)}).encode("utf-8")
+                    ctype = "application/json"
+                elif self.path.startswith("/simli_token"):
+                    # El token se crea aquí: la clave de Simli nunca llega al navegador.
+                    r = requests.post("https://api.simli.ai/compose/token", timeout=15,
+                                      headers={"x-simli-api-key": SIMLI_API_KEY},
+                                      json={"faceId": SIMLI_FACE_ID, "handleSilence": True,
+                                            "maxSessionLength": 3600, "maxIdleTime": 120})
+                    body = r.content
                     ctype = "application/json"
                 elif self.path.startswith("/live"):
                     body = _HTML_LIVE.encode("utf-8")
